@@ -60,6 +60,7 @@ services:
   # Auth Service (Ruby / Rails) — Port 3001
   # ---------------------------------------------------------------------------
   evo-auth:
+    image: evo-crm-evo-auth:latest
     build:
       context: ./evo-auth-service-community
       dockerfile: Dockerfile
@@ -88,6 +89,7 @@ services:
       start_period: 90s
 
   evo-auth-sidekiq:
+    image: evo-crm-evo-auth:latest
     build:
       context: ./evo-auth-service-community
       dockerfile: Dockerfile
@@ -113,6 +115,7 @@ services:
   # CRM Service (Ruby / Rails) — Port 3000
   # ---------------------------------------------------------------------------
   evo-crm:
+    image: evo-crm-evo-crm:latest
     build:
       context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
@@ -158,6 +161,7 @@ services:
       start_period: 120s
 
   evo-crm-sidekiq:
+    image: evo-crm-evo-crm:latest
     build:
       context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
