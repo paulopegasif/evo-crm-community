@@ -1,0 +1,545 @@
+## ============================================================================
+## Evo CRM — stack de produção para Coolify (build a partir do código-fonte)
+##
+## Diferente do docker-compose.yml (dev: RAILS_ENV=development, bind mount do
+## código, portas no host), este arquivo:
+##   * builda auth / crm / frontend / processor / bot-runtime / flow / gateway
+##     a partir dos submódulos (inclui o white-label do cliente);
+##   * roda os serviços Rails em RAILS_ENV=production;
+##   * não publica portas no host — o proxy do Coolify roteia por domínio.
+##
+## Domínios (configurar no Coolify, aba de cada serviço):
+##   evo-frontend → https://<FRONTEND_DOMAIN>          (porta 80)
+##   evo-gateway  → https://<API_DOMAIN>               (porta 3030)
+##   evo-flow     → https://<FLOW_DOMAIN>              (porta 3334)
+##
+## Todas as variáveis ${...} vêm das Environment Variables do Coolify.
+## Primeiro deploy: depois que tudo subir, rode o seed do auth
+##   (evo-auth → Terminal → `bundle exec rails db:seed`) e crie o admin em
+##   https://<FRONTEND_DOMAIN>/setup.
+## ============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: ${POSTGRES_DATABASE:-evo_community}
+      POSTGRES_USER: ${POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USERNAME:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:alpine
+    restart: unless-stopped
+    command: ["sh", "-c", "redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    image: rabbitmq:3-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: evoflow
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DB: default
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "${CLICKHOUSE_PASSWORD}", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # API Gateway (nginx) — único domínio público das APIs
+  # ---------------------------------------------------------------------------
+  evo-gateway:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3030"
+    environment:
+      AUTH_UPSTREAM: evo-auth:3001
+      CRM_UPSTREAM: evo-crm:3000
+      CORE_UPSTREAM: evo-core:5555
+      PROCESSOR_UPSTREAM: evo-processor:8000
+      BOT_RUNTIME_UPSTREAM: evo-bot-runtime:8080
+    depends_on:
+      - evo-auth
+      - evo-crm
+
+  # ---------------------------------------------------------------------------
+  # Auth Service (Ruby / Rails) — Port 3001
+  # ---------------------------------------------------------------------------
+  evo-auth:
+    image: evo-crm-evo-auth:production
+    build:
+      context: ./evo-auth-service-community
+      dockerfile: Dockerfile
+      args:
+        RAILS_ENV: production
+    restart: unless-stopped
+    environment:
+      RAILS_ENV: production
+      RAILS_MAX_THREADS: "5"
+      RAILS_LOG_TO_STDOUT: "true"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY}
+      DOORKEEPER_JWT_ALGORITHM: hs256
+      DOORKEEPER_JWT_ISS: evo-auth-service
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-evo_community}
+      POSTGRES_SSLMODE: disable
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      BACKEND_URL: https://${API_DOMAIN}
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      MFA_ISSUER: ${MFA_ISSUER:-Lumom CRM}
+      SIDEKIQ_CONCURRENCY: "10"
+      OAUTH_TOKEN_EXPIRES_IN: "28800"
+      ACTIVE_STORAGE_SERVICE: local
+      ACTIVE_STORAGE_URL: https://${API_DOMAIN}
+      SMTP_DOMAIN: ${SMTP_DOMAIN:-}
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_ADDRESS: ${SMTP_ADDRESS:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_AUTHENTICATION: plain
+      SMTP_ENABLE_STARTTLS_AUTO: "true"
+      # White-label (seed/boot sobrescreve installation configs)
+      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-Lumom Beauty}
+      ORGANIZATION_DOMAIN: ${FRONTEND_DOMAIN}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-suporte@lumom.com.br}
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-pt-BR}
+    volumes:
+      - auth_storage:/rails/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  evo-auth-sidekiq:
+    image: evo-crm-evo-auth:production
+    build:
+      context: ./evo-auth-service-community
+      dockerfile: Dockerfile
+      args:
+        RAILS_ENV: production
+    restart: unless-stopped
+    environment:
+      RAILS_ENV: production
+      RUN_MIGRATIONS: "false"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      DOORKEEPER_JWT_SECRET_KEY: ${DOORKEEPER_JWT_SECRET_KEY}
+      DOORKEEPER_JWT_ALGORITHM: hs256
+      DOORKEEPER_JWT_ISS: evo-auth-service
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-evo_community}
+      POSTGRES_SSLMODE: disable
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      BACKEND_URL: https://${API_DOMAIN}
+      SIDEKIQ_CONCURRENCY: "10"
+      ACTIVE_STORAGE_SERVICE: local
+      SMTP_DOMAIN: ${SMTP_DOMAIN:-}
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_ADDRESS: ${SMTP_ADDRESS:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_AUTHENTICATION: plain
+      SMTP_ENABLE_STARTTLS_AUTO: "true"
+    volumes:
+      - auth_storage:/rails/storage
+    depends_on:
+      evo-auth:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+
+  # ---------------------------------------------------------------------------
+  # CRM Service (Ruby / Rails) — Port 3000
+  # ---------------------------------------------------------------------------
+  evo-crm:
+    image: evo-crm-evo-crm:production
+    build:
+      context: ./evo-ai-crm-community
+      dockerfile: docker/Dockerfile
+      args:
+        RAILS_ENV: production
+    restart: unless-stopped
+    environment:
+      RAILS_ENV: production
+      RAILS_SERVE_STATIC_FILES: "true"
+      RAILS_LOG_TO_STDOUT: "true"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-evo_community}
+      POSTGRES_SSLMODE: disable
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
+      EVO_AI_CORE_SERVICE_URL: http://evo-core:5555
+      EVO_FLOW_ENABLED: "true"
+      EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
+      EVO_FLOW_ALLOW_INSECURE: "true"
+      AUTH_APIKEY_INTEGRATION_LOCAL: ${AUTH_APIKEY_INTEGRATION_LOCAL}
+      BACKEND_URL: https://${API_DOMAIN}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
+      DISABLE_TELEMETRY: "true"
+      LOG_LEVEL: info
+      ENABLE_ACCOUNT_SIGNUP: ${ENABLE_ACCOUNT_SIGNUP:-false}
+      ENABLE_PUSH_RELAY_SERVER: "true"
+      ENABLE_INBOX_EVENTS: "true"
+      BOT_RUNTIME_URL: http://evo-bot-runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      ACTIVE_STORAGE_SERVICE: local
+      ACTIVE_STORAGE_URL: https://${API_DOMAIN}
+      SMTP_DOMAIN: ${SMTP_DOMAIN:-}
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_ADDRESS: ${SMTP_ADDRESS:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_AUTHENTICATION: plain
+      SMTP_ENABLE_STARTTLS_AUTO: "true"
+      # White-label (seed/boot sobrescreve installation configs)
+      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-Lumom Beauty}
+      ORGANIZATION_DOMAIN: ${FRONTEND_DOMAIN}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-suporte@lumom.com.br}
+      DEFAULT_LOCALE: ${DEFAULT_LOCALE:-pt-BR}
+      INSTALLATION_NAME: ${INSTALLATION_NAME:-Lumom CRM}
+      BRAND_NAME: ${BRAND_NAME:-Lumom CRM}
+    volumes:
+      - crm_storage:/app/storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      evo-auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+  evo-crm-sidekiq:
+    image: evo-crm-evo-crm:production
+    build:
+      context: ./evo-ai-crm-community
+      dockerfile: docker/Dockerfile
+      args:
+        RAILS_ENV: production
+    restart: unless-stopped
+    environment:
+      RAILS_ENV: production
+      RUN_MIGRATIONS: "false"
+      RAILS_LOG_TO_STDOUT: "true"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_USERNAME: ${POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${POSTGRES_DATABASE:-evo_community}
+      POSTGRES_SSLMODE: disable
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
+      EVO_AI_CORE_SERVICE_URL: http://evo-core:5555
+      EVO_FLOW_ENABLED: "true"
+      EVO_FLOW_API_URL: http://evo-flow:3334/api/v1
+      EVO_FLOW_ALLOW_INSECURE: "true"
+      AUTH_APIKEY_INTEGRATION_LOCAL: ${AUTH_APIKEY_INTEGRATION_LOCAL}
+      BACKEND_URL: https://${API_DOMAIN}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN}
+      DISABLE_TELEMETRY: "true"
+      LOG_LEVEL: info
+      BOT_RUNTIME_URL: http://evo-bot-runtime:8080
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      ACTIVE_STORAGE_SERVICE: local
+      ACTIVE_STORAGE_URL: https://${API_DOMAIN}
+      SMTP_DOMAIN: ${SMTP_DOMAIN:-}
+      MAILER_SENDER_EMAIL: ${MAILER_SENDER_EMAIL:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_ADDRESS: ${SMTP_ADDRESS:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_AUTHENTICATION: plain
+      SMTP_ENABLE_STARTTLS_AUTO: "true"
+    volumes:
+      - crm_storage:/app/storage
+    depends_on:
+      evo-crm:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    command: ["bundle", "exec", "sidekiq", "-C", "config/sidekiq.yml"]
+
+  # ---------------------------------------------------------------------------
+  # Core Service (Go / Gin) — Port 5555 (imagem pública, sem customização)
+  # ---------------------------------------------------------------------------
+  evo-core:
+    image: evoapicloud/evo-ai-core-service-community:latest
+    restart: unless-stopped
+    environment:
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_USER: ${POSTGRES_USERNAME:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DATABASE:-evo_community}
+      DB_SSLMODE: disable
+      DB_MAX_IDLE_CONNS: "10"
+      DB_MAX_OPEN_CONNS: "100"
+      DB_CONN_MAX_LIFETIME: 1h
+      DB_CONN_MAX_IDLE_TIME: 30m
+      PORT: "5555"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY}
+      JWT_ALGORITHM: HS256
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      EVOLUTION_BASE_URL: http://evo-crm:3000
+      EVO_AUTH_BASE_URL: http://evo-auth:3001
+      AI_PROCESSOR_URL: http://evo-processor:8000
+      AI_PROCESSOR_VERSION: v1
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:5555/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Processor Service (Python / FastAPI) — Port 8000
+  # ---------------------------------------------------------------------------
+  evo-processor:
+    build:
+      context: ./evo-ai-processor-community
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      POSTGRES_CONNECTION_STRING: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DATABASE:-evo_community}
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_SSL: "false"
+      REDIS_DB: "1"
+      REDIS_KEY_PREFIX: a2a_
+      REDIS_TTL: "3600"
+      HOST: 0.0.0.0
+      PORT: "8000"
+      DEBUG: "false"
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      EVO_AUTH_BASE_URL: http://evo-auth:3001
+      EVO_AI_CRM_URL: http://evo-crm:3000
+      CORE_SERVICE_URL: http://evo-core:5555/api/v1
+      APP_URL: https://${API_DOMAIN}
+      API_URL: https://${API_DOMAIN}
+      TOOLS_CACHE_ENABLED: "true"
+      TOOLS_CACHE_TTL: "3600"
+    volumes:
+      - processor_logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      evo-auth:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Bot Runtime (Go / Gin) — Port 8080
+  # ---------------------------------------------------------------------------
+  evo-bot-runtime:
+    build:
+      context: ./evo-bot-runtime
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      LISTEN_ADDR: 0.0.0.0:8080
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/1
+      AI_PROCESSOR_URL: http://evo-processor:8000
+      BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
+      AI_CALL_TIMEOUT_SECONDS: "30"
+    depends_on:
+      redis:
+        condition: service_healthy
+      evo-processor:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # EvoFlow (NestJS — journeys/campaigns) — Port 3334
+  # ---------------------------------------------------------------------------
+  evo-flow:
+    build:
+      context: ./evo-flow-community
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "3334"
+    command:
+      - sh
+      - -c
+      - |
+        node -e 'const{Client}=require("pg");const db=process.env.POSTGRES_DB_DATABASE;const c=new Client({host:process.env.POSTGRES_DB_HOST,port:+(process.env.POSTGRES_DB_PORT||5432),user:process.env.POSTGRES_DB_USERNAME,password:process.env.POSTGRES_DB_PASSWORD,database:"postgres"});c.connect().then(()=>c.query("CREATE DATABASE "+db)).then(()=>console.log("[init] created "+db)).catch(e=>console.log("[init] "+(e.code==="42P04"?"db already exists":e.message))).finally(()=>c.end());'
+        node_modules/.bin/typeorm migration:run -d dist/database/ormconfig.js || echo "[init] migration:run failed (continuing)"
+        exec node dist/main.js
+    environment:
+      NODE_ENV: production
+      RUN_MODE: api
+      QUEUE_MODE: direct
+      STORAGE_MODE: clickhouse
+      WRITE_MODE: ch-sync
+      PORT: "3334"
+      LOG_LEVEL: log
+      BROKER_TYPE: rabbitmq
+      RABBITMQ_URL: amqp://evoflow:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AUTH_APIKEY_INTEGRATION_LOCAL: ${AUTH_APIKEY_INTEGRATION_LOCAL}
+      EVO_AUTH_SERVICE_URL: http://evo-auth:3001
+      EVO_AUTH_VALIDATE_TOKEN_ENDPOINT: /api/v1/auth/validate
+      EVOAI_CRM_BASE_URL: http://evo-crm:3000
+      EVOAI_CRM_API_TOKEN: ${EVOAI_CRM_API_TOKEN}
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DATABASE: evo_campaign
+      CLICKHOUSE_USERNAME: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_TABLE: contact_events
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: "4"
+      POSTGRES_DB_HOST: postgres
+      POSTGRES_DB_PORT: "5432"
+      POSTGRES_DB_USERNAME: ${POSTGRES_USERNAME:-postgres}
+      POSTGRES_DB_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB_DATABASE: evo_campaign
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Frontend (React / Vite / Nginx) — Port 80
+  # ---------------------------------------------------------------------------
+  evo-frontend:
+    build:
+      context: ./evo-ai-frontend-community
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "80"
+    environment:
+      VITE_APP_ENV: production
+      VITE_API_URL: https://${API_DOMAIN}
+      VITE_AUTH_API_URL: https://${API_DOMAIN}
+      VITE_WS_URL: https://${API_DOMAIN}
+      VITE_EVOAI_API_URL: https://${API_DOMAIN}
+      VITE_AGENT_PROCESSOR_URL: https://${API_DOMAIN}
+      VITE_EVOFLOW_API_URL: https://${FLOW_DOMAIN}
+    depends_on:
+      - evo-gateway
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:80/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:
+  clickhouse_data:
+  auth_storage:
+  crm_storage:
+  processor_logs:
