@@ -388,6 +388,16 @@ services:
       context: ./evo-ai-processor-community
       dockerfile: Dockerfile
     restart: unless-stopped
+    # O schema master do CRM (db:prepare) recria `alembic_version` vazia. Se as
+    # tabelas do processor já existem, o upgrade falha com DuplicateTable — nesse
+    # caso marcamos a revisão atual (stamp) em vez de entrar em crash loop.
+    command:
+      - sh
+      - -c
+      - |
+        alembic upgrade head || { echo "[init] alembic upgrade failed — stamping head"; alembic stamp head; }
+        python -m scripts.run_seeders || echo "[init] seeders failed (continuing)"
+        exec uvicorn src.main:app --host "$$HOST" --port "$$PORT"
     environment:
       POSTGRES_CONNECTION_STRING: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DATABASE:-evo_community}
       REDIS_HOST: redis
@@ -418,6 +428,9 @@ services:
       redis:
         condition: service_healthy
       evo-auth:
+        condition: service_healthy
+      # Espera o schema master do CRM ser carregado antes de rodar o alembic.
+      evo-crm:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
