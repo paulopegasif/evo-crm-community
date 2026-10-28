@@ -12,6 +12,9 @@
 ##   evo-frontend → https://<FRONTEND_DOMAIN>          (porta 80)
 ##   evo-gateway  → https://<API_DOMAIN>               (porta 3030)
 ##   evo-flow     → https://<FLOW_DOMAIN>              (porta 3334)
+##   n8n          → https://<N8N_DOMAIN>               (porta 5678)
+##   evo-go-gateway: sem domínio público (o CRM usa a rede interna e o
+##                   frontend faz proxy em /evo-go/)
 ##
 ## Todas as variáveis ${...} vêm das Environment Variables do Coolify.
 ## Primeiro deploy: depois que tudo subir, rode o seed do auth
@@ -137,7 +140,7 @@ services:
       FRONTEND_URL: https://${FRONTEND_DOMAIN}
       BACKEND_URL: https://${API_DOMAIN}
       CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
-      MFA_ISSUER: ${MFA_ISSUER:-Lumom CRM}
+      MFA_ISSUER: ${MFA_ISSUER:-INOVE CRM}
       SIDEKIQ_CONCURRENCY: "10"
       OAUTH_TOKEN_EXPIRES_IN: "28800"
       ACTIVE_STORAGE_SERVICE: local
@@ -151,9 +154,9 @@ services:
       SMTP_AUTHENTICATION: plain
       SMTP_ENABLE_STARTTLS_AUTO: "true"
       # White-label (seed/boot sobrescreve installation configs)
-      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-Lumom Beauty}
+      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-INOVE Centro Educacional}
       ORGANIZATION_DOMAIN: ${FRONTEND_DOMAIN}
-      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-suporte@lumom.com.br}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
       DEFAULT_LOCALE: ${DEFAULT_LOCALE:-pt-BR}
     volumes:
       - auth_storage:/rails/storage
@@ -256,6 +259,9 @@ services:
       BOT_RUNTIME_URL: http://evo-bot-runtime:8080
       BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
       BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      # Evolution Go (canal WhatsApp via QR Code) — URL interna + token admin global
+      EVOLUTION_GO_API_URL: http://evo-go-gateway:8080
+      EVOLUTION_GO_ADMIN_SECRET: ${EVOLUTION_GO_API_KEY}
       ACTIVE_STORAGE_SERVICE: local
       ACTIVE_STORAGE_URL: https://${API_DOMAIN}
       SMTP_DOMAIN: ${SMTP_DOMAIN:-}
@@ -267,12 +273,12 @@ services:
       SMTP_AUTHENTICATION: plain
       SMTP_ENABLE_STARTTLS_AUTO: "true"
       # White-label (seed/boot sobrescreve installation configs)
-      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-Lumom Beauty}
+      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-INOVE Centro Educacional}
       ORGANIZATION_DOMAIN: ${FRONTEND_DOMAIN}
-      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-suporte@lumom.com.br}
+      SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
       DEFAULT_LOCALE: ${DEFAULT_LOCALE:-pt-BR}
-      INSTALLATION_NAME: ${INSTALLATION_NAME:-Lumom CRM}
-      BRAND_NAME: ${BRAND_NAME:-Lumom CRM}
+      INSTALLATION_NAME: ${INSTALLATION_NAME:-INOVE CRM}
+      BRAND_NAME: ${BRAND_NAME:-INOVE CRM}
     volumes:
       - crm_storage:/app/storage
     depends_on:
@@ -325,6 +331,9 @@ services:
       BOT_RUNTIME_URL: http://evo-bot-runtime:8080
       BOT_RUNTIME_SECRET: ${BOT_RUNTIME_SECRET}
       BOT_RUNTIME_POSTBACK_BASE_URL: http://evo-crm:3000
+      # Evolution Go (canal WhatsApp via QR Code) — URL interna + token admin global
+      EVOLUTION_GO_API_URL: http://evo-go-gateway:8080
+      EVOLUTION_GO_ADMIN_SECRET: ${EVOLUTION_GO_API_KEY}
       ACTIVE_STORAGE_SERVICE: local
       ACTIVE_STORAGE_URL: https://${API_DOMAIN}
       SMTP_DOMAIN: ${SMTP_DOMAIN:-}
@@ -549,6 +558,100 @@ services:
       retries: 3
       start_period: 15s
 
+  # ---------------------------------------------------------------------------
+  # db-init — cria os bancos extras (Evolution Go, n8n) no postgres da stack
+  # ---------------------------------------------------------------------------
+  db-init:
+    image: pgvector/pgvector:pg16
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USERNAME:-postgres}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - sh
+      - -c
+      - |
+        for db in evogo_auth evogo_users n8n; do
+          psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='$$db'" | grep -q 1 \
+            || psql -d postgres -c "CREATE DATABASE $$db" && echo "[db-init] $$db ok"
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Evolution Go (WhatsApp via QR Code) — Port 8080, só na rede interna
+  # O nome do serviço precisa ser evo-go-gateway: é o host usado pelo CRM e
+  # pelo proxy /evo-go/ do nginx do frontend.
+  # ---------------------------------------------------------------------------
+  evo-go-gateway:
+    build:
+      context: ./evolution-go
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      SERVER_PORT: "8080"
+      CLIENT_NAME: ${EVOLUTION_GO_CLIENT_NAME:-inove}
+      GLOBAL_API_KEY: ${EVOLUTION_GO_API_KEY}
+      POSTGRES_AUTH_DB: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/evogo_auth?sslmode=disable
+      POSTGRES_USERS_DB: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/evogo_users?sslmode=disable
+      DATABASE_SAVE_MESSAGES: "false"
+      AMQP_URL: amqp://evoflow:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      AMQP_GLOBAL_ENABLED: "false"
+      WADEBUG: INFO
+      LOGTYPE: console
+      WEBHOOK_FILES: "true"
+      CONNECT_ON_STARTUP: "true"
+      OS_NAME: ${BRAND_NAME:-INOVE CRM}
+      MINIO_ENABLED: "false"
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/server/ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # n8n — automações e ferramentas dos agentes (Hotmart etc.) — Port 5678
+  # ---------------------------------------------------------------------------
+  n8n:
+    image: n8nio/n8n:latest
+    restart: unless-stopped
+    expose:
+      - "5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: "5432"
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: ${POSTGRES_USERNAME:-postgres}
+      DB_POSTGRESDB_PASSWORD: ${POSTGRES_PASSWORD}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY}
+      N8N_HOST: ${N8N_DOMAIN}
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: https
+      N8N_PROXY_HOPS: "1"
+      WEBHOOK_URL: https://${N8N_DOMAIN}/
+      N8N_EDITOR_BASE_URL: https://${N8N_DOMAIN}/
+      GENERIC_TIMEZONE: America/Sao_Paulo
+      TZ: America/Sao_Paulo
+      N8N_DIAGNOSTICS_ENABLED: "false"
+      N8N_RUNNERS_ENABLED: "true"
+      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:
   redis_data:
@@ -557,3 +660,4 @@ volumes:
   auth_storage:
   crm_storage:
   processor_logs:
+  n8n_data:
