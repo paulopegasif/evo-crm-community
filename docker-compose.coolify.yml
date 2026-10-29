@@ -310,6 +310,7 @@ services:
       DEFAULT_LOCALE: ${DEFAULT_LOCALE:-pt-BR}
       INSTALLATION_NAME: ${INSTALLATION_NAME:-Lumom CRM}
       BRAND_NAME: ${BRAND_NAME:-Lumom CRM}
+      EXTERNAL_LEADS_DEFAULT_USER_EMAIL: ${EXTERNAL_LEADS_DEFAULT_USER_EMAIL:-consultalumom@gmail.com}
     volumes:
       - crm_storage:/app/storage
     depends_on:
@@ -372,6 +373,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_AUTHENTICATION: plain
       SMTP_ENABLE_STARTTLS_AUTO: "true"
+      EXTERNAL_LEADS_DEFAULT_USER_EMAIL: ${EXTERNAL_LEADS_DEFAULT_USER_EMAIL:-consultalumom@gmail.com}
     volumes:
       - crm_storage:/app/storage
     depends_on:
