@@ -26,6 +26,7 @@ services:
   postgres:
     image: pgvector/pgvector:pg16
     restart: unless-stopped
+    oom_score_adj: -800
     volumes:
       - postgres_data:/var/lib/postgresql/data
     environment:
@@ -42,6 +43,7 @@ services:
   redis:
     image: redis:alpine
     restart: unless-stopped
+    oom_score_adj: -500
     command: ["sh", "-c", "redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes"]
     volumes:
       - redis_data:/data
@@ -54,37 +56,69 @@ services:
   rabbitmq:
     image: rabbitmq:3-alpine
     restart: unless-stopped
+    oom_score_adj: 300
+    mem_limit: 512m
     environment:
       RABBITMQ_DEFAULT_USER: evoflow
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
+      test: ["CMD", "nc", "-z", "127.0.0.1", "5672"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   clickhouse:
     image: clickhouse/clickhouse-server:latest
     restart: unless-stopped
+    oom_score_adj: 500
+    mem_limit: 1g
     environment:
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DB: default
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+    entrypoint:
+      - sh
+      - -c
+      - |
+        cat > /etc/clickhouse-server/config.d/low-resources.xml <<'XML'
+        <clickhouse>
+          <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
+          <mark_cache_size>268435456</mark_cache_size>
+          <index_mark_cache_size>67108864</index_mark_cache_size>
+          <uncompressed_cache_size>16777216</uncompressed_cache_size>
+          <query_log remove="1"/>
+          <query_thread_log remove="1"/>
+          <query_views_log remove="1"/>
+          <part_log remove="1"/>
+          <trace_log remove="1"/>
+          <text_log remove="1"/>
+          <metric_log remove="1"/>
+          <latency_log remove="1"/>
+          <error_log remove="1"/>
+          <asynchronous_metric_log remove="1"/>
+          <processors_profile_log remove="1"/>
+          <opentelemetry_span_log remove="1"/>
+          <session_log remove="1"/>
+          <blob_storage_log remove="1"/>
+          <background_schedule_pool_log remove="1"/>
+        </clickhouse>
+        XML
+        exec /entrypoint.sh
     ulimits:
       nofile:
         soft: 262144
         hard: 262144
     healthcheck:
-      test: ["CMD", "clickhouse-client", "--user", "default", "--password", "${CLICKHOUSE_PASSWORD}", "--query", "SELECT 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:8123/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   # ---------------------------------------------------------------------------
   # API Gateway (nginx) — único domínio público das APIs
@@ -94,6 +128,7 @@ services:
       context: ./nginx
       dockerfile: Dockerfile
     restart: unless-stopped
+    oom_score_adj: -500
     expose:
       - "3030"
     environment:
@@ -110,13 +145,14 @@ services:
   # Auth Service (Ruby / Rails) — Port 3001
   # ---------------------------------------------------------------------------
   evo-auth:
-    image: evo-crm-evo-auth:production
+    image: lumom-evo-auth:production
     build:
       context: ./evo-auth-service-community
       dockerfile: Dockerfile
       args:
         RAILS_ENV: production
     restart: unless-stopped
+    oom_score_adj: -300
     environment:
       RAILS_ENV: production
       RAILS_MAX_THREADS: "5"
@@ -170,7 +206,7 @@ services:
       start_period: 120s
 
   evo-auth-sidekiq:
-    image: evo-crm-evo-auth:production
+    image: lumom-evo-auth:production
     build:
       context: ./evo-auth-service-community
       dockerfile: Dockerfile
@@ -218,13 +254,14 @@ services:
   # CRM Service (Ruby / Rails) — Port 3000
   # ---------------------------------------------------------------------------
   evo-crm:
-    image: evo-crm-evo-crm:production
+    image: lumom-evo-crm:production
     build:
       context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
       args:
         RAILS_ENV: production
     restart: unless-stopped
+    oom_score_adj: -500
     environment:
       RAILS_ENV: production
       RAILS_SERVE_STATIC_FILES: "true"
@@ -291,7 +328,7 @@ services:
       start_period: 180s
 
   evo-crm-sidekiq:
-    image: evo-crm-evo-crm:production
+    image: lumom-evo-crm:production
     build:
       context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
@@ -473,12 +510,14 @@ services:
       context: ./evo-flow-community
       dockerfile: Dockerfile
     restart: unless-stopped
+    oom_score_adj: 300
     expose:
       - "3334"
     command:
       - sh
       - -c
       - |
+        node -e 'const h=require("http");const t=()=>h.get("http://"+process.env.CLICKHOUSE_HOST+":"+process.env.CLICKHOUSE_PORT+"/ping",r=>{r.resume();r.statusCode===200?process.exit(0):setTimeout(t,15000)}).on("error",()=>{console.log("[init] waiting for clickhouse");setTimeout(t,15000)});t();'
         node -e 'const{Client}=require("pg");const db=process.env.POSTGRES_DB_DATABASE;const c=new Client({host:process.env.POSTGRES_DB_HOST,port:+(process.env.POSTGRES_DB_PORT||5432),user:process.env.POSTGRES_DB_USERNAME,password:process.env.POSTGRES_DB_PASSWORD,database:"postgres"});c.connect().then(()=>c.query("CREATE DATABASE "+db)).then(()=>console.log("[init] created "+db)).catch(e=>console.log("[init] "+(e.code==="42P04"?"db already exists":e.message))).finally(()=>c.end());'
         node_modules/.bin/typeorm migration:run -d dist/database/ormconfig.js || echo "[init] migration:run failed (continuing)"
         exec node dist/main.js
