@@ -148,7 +148,7 @@ services:
   # Auth Service (Ruby / Rails) — Port 3001
   # ---------------------------------------------------------------------------
   evo-auth:
-    image: inove-evo-auth:production
+    image: elph-evo-auth:production
     build:
       context: ./evo-auth-service-community
       dockerfile: Dockerfile
@@ -176,7 +176,7 @@ services:
       FRONTEND_URL: https://${FRONTEND_DOMAIN}
       BACKEND_URL: https://${API_DOMAIN}
       CORS_ORIGINS: https://${FRONTEND_DOMAIN},https://${API_DOMAIN}
-      MFA_ISSUER: ${MFA_ISSUER:-INOVE CRM}
+      MFA_ISSUER: ${MFA_ISSUER:-Elph CRM}
       SIDEKIQ_CONCURRENCY: "10"
       OAUTH_TOKEN_EXPIRES_IN: "28800"
       ACTIVE_STORAGE_SERVICE: local
@@ -190,7 +190,7 @@ services:
       SMTP_AUTHENTICATION: plain
       SMTP_ENABLE_STARTTLS_AUTO: "true"
       # White-label (seed/boot sobrescreve installation configs)
-      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-INOVE Centro Educacional}
+      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-ELPH CORP}
       ORGANIZATION_DOMAIN: ${FRONTEND_DOMAIN}
       SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
       DEFAULT_LOCALE: ${DEFAULT_LOCALE:-pt-BR}
@@ -209,7 +209,7 @@ services:
       start_period: 120s
 
   evo-auth-sidekiq:
-    image: inove-evo-auth:production
+    image: elph-evo-auth:production
     build:
       context: ./evo-auth-service-community
       dockerfile: Dockerfile
@@ -257,7 +257,7 @@ services:
   # CRM Service (Ruby / Rails) — Port 3000
   # ---------------------------------------------------------------------------
   evo-crm:
-    image: inove-evo-crm:production
+    image: elph-evo-crm:production
     build:
       context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
@@ -310,12 +310,13 @@ services:
       SMTP_AUTHENTICATION: plain
       SMTP_ENABLE_STARTTLS_AUTO: "true"
       # White-label (seed/boot sobrescreve installation configs)
-      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-INOVE Centro Educacional}
+      ORGANIZATION_NAME: ${ORGANIZATION_NAME:-ELPH CORP}
       ORGANIZATION_DOMAIN: ${FRONTEND_DOMAIN}
       SUPPORT_EMAIL: ${SUPPORT_EMAIL:-}
       DEFAULT_LOCALE: ${DEFAULT_LOCALE:-pt-BR}
-      INSTALLATION_NAME: ${INSTALLATION_NAME:-INOVE CRM}
-      BRAND_NAME: ${BRAND_NAME:-INOVE CRM}
+      INSTALLATION_NAME: ${INSTALLATION_NAME:-Elph CRM}
+      BRAND_NAME: ${BRAND_NAME:-Elph CRM}
+      EXTERNAL_LEADS_DEFAULT_USER_EMAIL: ${EXTERNAL_LEADS_DEFAULT_USER_EMAIL:-}
     volumes:
       - crm_storage:/app/storage
     depends_on:
@@ -334,7 +335,7 @@ services:
       start_period: 180s
 
   evo-crm-sidekiq:
-    image: inove-evo-crm:production
+    image: elph-evo-crm:production
     build:
       context: ./evo-ai-crm-community
       dockerfile: docker/Dockerfile
@@ -381,6 +382,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_AUTHENTICATION: plain
       SMTP_ENABLE_STARTTLS_AUTO: "true"
+      EXTERNAL_LEADS_DEFAULT_USER_EMAIL: ${EXTERNAL_LEADS_DEFAULT_USER_EMAIL:-}
     volumes:
       - crm_storage:/app/storage
     depends_on:
@@ -633,7 +635,7 @@ services:
       - "8080"
     environment:
       SERVER_PORT: "8080"
-      CLIENT_NAME: ${EVOLUTION_GO_CLIENT_NAME:-inove}
+      CLIENT_NAME: ${EVOLUTION_GO_CLIENT_NAME:-elph}
       GLOBAL_API_KEY: ${EVOLUTION_GO_API_KEY}
       POSTGRES_AUTH_DB: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/evogo_auth?sslmode=disable
       POSTGRES_USERS_DB: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/evogo_users?sslmode=disable
@@ -644,7 +646,7 @@ services:
       LOGTYPE: console
       WEBHOOK_FILES: "true"
       CONNECT_ON_STARTUP: "true"
-      OS_NAME: ${BRAND_NAME:-INOVE CRM}
+      OS_NAME: ${BRAND_NAME:-Elph CRM}
       MINIO_ENABLED: "false"
     depends_on:
       db-init:
@@ -659,7 +661,7 @@ services:
       start_period: 20s
 
   # ---------------------------------------------------------------------------
-  # n8n — automações e ferramentas dos agentes (Hotmart etc.) — Port 5678
+  # n8n — automações e ferramentas dos agentes — Port 5678
   # ---------------------------------------------------------------------------
   n8n:
     image: n8nio/n8n:latest
