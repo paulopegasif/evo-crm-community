@@ -628,13 +628,17 @@ services:
     # Imagem pré-buildada (fork com fix do 405 "Client outdated") — não compilar
     # Go na VPS: o build junto com o resto da stack esgotou RAM/swap (2026-11-09).
     # Para atualizar: buildar fora da VPS e publicar uma nova tag no GHCR.
-    image: ghcr.io/paulopegasif/evolution-go:wa-fix-f75105c
+    image: ghcr.io/paulopegasif/evolution-go:wa-fix-v072-3fe748e
     restart: unless-stopped
     expose:
       - "8080"
     environment:
       SERVER_PORT: "8080"
       CLIENT_NAME: ${EVOLUTION_GO_CLIENT_NAME:-inove}
+      # Opcional: fixar a versão do WhatsApp Web no handshake (vazio = busca automática)
+      WHATSAPP_VERSION_MAJOR: ${WHATSAPP_VERSION_MAJOR:-}
+      WHATSAPP_VERSION_MINOR: ${WHATSAPP_VERSION_MINOR:-}
+      WHATSAPP_VERSION_PATCH: ${WHATSAPP_VERSION_PATCH:-}
       GLOBAL_API_KEY: ${EVOLUTION_GO_API_KEY}
       POSTGRES_AUTH_DB: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/evogo_auth?sslmode=disable
       POSTGRES_USERS_DB: postgresql://${POSTGRES_USERNAME:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/evogo_users?sslmode=disable
