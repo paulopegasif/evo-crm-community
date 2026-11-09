@@ -625,9 +625,10 @@ services:
   # pelo proxy /evo-go/ do nginx do frontend.
   # ---------------------------------------------------------------------------
   evo-go-gateway:
-    build:
-      context: ./evolution-go
-      dockerfile: Dockerfile
+    # Imagem pré-buildada (fork com fix do 405 "Client outdated") — não compilar
+    # Go na VPS: o build junto com o resto da stack esgotou RAM/swap (2026-11-09).
+    # Para atualizar: buildar fora da VPS e publicar uma nova tag no GHCR.
+    image: ghcr.io/paulopegasif/evolution-go:wa-fix-f75105c
     restart: unless-stopped
     expose:
       - "8080"
