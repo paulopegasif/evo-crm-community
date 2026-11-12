@@ -628,7 +628,7 @@ services:
     # Imagem pré-buildada (fork com fix do 405 "Client outdated") — não compilar
     # Go na VPS: o build junto com o resto da stack esgotou RAM/swap (2026-11-09).
     # Para atualizar: buildar fora da VPS e publicar uma nova tag no GHCR.
-    image: ghcr.io/paulopegasif/evolution-go:wa-fix-v072-3fe748e
+    image: ghcr.io/paulopegasif/evolution-go:wa-fix-v072-pool-16e42be
     restart: unless-stopped
     expose:
       - "8080"
