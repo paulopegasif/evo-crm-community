@@ -489,9 +489,8 @@ services:
   # Bot Runtime (Go / Gin) — Port 8080
   # ---------------------------------------------------------------------------
   evo-bot-runtime:
-    build:
-      context: ./evo-bot-runtime
-      dockerfile: Dockerfile
+    # INOVE fork: paragraph-mode segmentation (paulopegasif/evo-bot-runtime inove/paragraph-split)
+    image: ghcr.io/paulopegasif/evo-bot-runtime:inove-para-a906545
     restart: unless-stopped
     environment:
       LISTEN_ADDR: 0.0.0.0:8080
