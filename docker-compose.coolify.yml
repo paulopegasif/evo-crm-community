@@ -627,10 +627,11 @@ services:
   # pelo proxy /evo-go/ do nginx do frontend.
   # ---------------------------------------------------------------------------
   evo-go-gateway:
-    # Imagem pré-buildada (fork v0.7.2 + fix do 405 "Client outdated") — não
-    # compilar Go na VPS: o build junto com o resto da stack esgotou RAM/swap
-    # (2026-11-09). Para atualizar: buildar fora da VPS e publicar nova tag no GHCR.
-    image: ghcr.io/paulopegasif/evolution-go:wa-fix-v072-3fe748e
+    # Imagem oficial 0.7.3 (2026-11-12): corrige o 405 "Client outdated" que o
+    # WhatsApp passou a devolver em 2026-11-02 e o vazamento de conexões com o
+    # Postgres. Não compilar Go na VPS: o build junto com o resto da stack
+    # esgotou RAM/swap (2026-11-09).
+    image: evoapicloud/evolution-go:0.7.3
     restart: unless-stopped
     expose:
       - "8080"
