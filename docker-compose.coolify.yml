@@ -91,6 +91,9 @@ services:
           <mark_cache_size>268435456</mark_cache_size>
           <index_mark_cache_size>67108864</index_mark_cache_size>
           <uncompressed_cache_size>16777216</uncompressed_cache_size>
+          <!-- 2 vCPU host: quieter logs and slower metric polling cut idle CPU/disk -->
+          <logger><level>warning</level></logger>
+          <asynchronous_metrics_update_period_s>60</asynchronous_metrics_update_period_s>
           <query_log remove="1"/>
           <query_thread_log remove="1"/>
           <query_views_log remove="1"/>
@@ -106,6 +109,8 @@ services:
           <session_log remove="1"/>
           <blob_storage_log remove="1"/>
           <background_schedule_pool_log remove="1"/>
+          <asynchronous_insert_log remove="1"/>
+          <query_metric_log remove="1"/>
         </clickhouse>
         XML
         exec /entrypoint.sh
