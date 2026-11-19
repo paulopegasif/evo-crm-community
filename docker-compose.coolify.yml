@@ -435,9 +435,9 @@ services:
   # Processor Service (Python / FastAPI) — Port 8000
   # ---------------------------------------------------------------------------
   evo-processor:
-    build:
-      context: ./evo-ai-processor-community
-      dockerfile: Dockerfile
+    # INOVE fork: HTTP tool params declared to the model (paulopegasif/evo-ai-processor-community inove/tool-signature).
+    # Prebuilt on GitHub Actions so Coolify deploys pull instead of building on the VPS.
+    image: ghcr.io/paulopegasif/evo-ai-processor-community:inove-4e9685b
     restart: unless-stopped
     # O schema master do CRM (db:prepare) recria `alembic_version` vazia. Se as
     # tabelas do processor já existem, o upgrade falha com DuplicateTable — nesse
