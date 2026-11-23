@@ -494,12 +494,12 @@ services:
   # Bot Runtime (Go / Gin) — Port 8080
   # ---------------------------------------------------------------------------
   evo-bot-runtime:
-    # INOVE fork: paragraph-mode segmentation + audio transcription + typing indicator (paulopegasif/evo-bot-runtime inove/paragraph-split)
+    # INOVE fork: paragraph-mode segmentation + audio transcription + typing indicator + loop guard BOT_GUARD_* (paulopegasif/evo-bot-runtime inove/paragraph-split)
     # Secrets for transcription (CRM_API_URL, CRM_API_TOKEN, OPENAI_API_KEY) live on the host, outside git.
     env_file:
       - path: /data/inove-secrets/bot-runtime.env
         required: false
-    image: ghcr.io/paulopegasif/evo-bot-runtime:inove-typing-f849880
+    image: ghcr.io/paulopegasif/evo-bot-runtime:inove-guard-1d22883
     restart: unless-stopped
     environment:
       LISTEN_ADDR: 0.0.0.0:8080
